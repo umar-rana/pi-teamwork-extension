@@ -28,6 +28,8 @@ test("rejects hostile site labels and confines the origin", () => {
   for (const hostile of [
     "", "  ", "acme.evil.test", "https://acme.teamwork.com", "acme:8443", "acme/../evil", "acme@evil",
     "-acme", "acme-", "acme_1", "ac me", "acmé", "acme%2eevil", "a".repeat(64), "evil.com#",
+    // Trim-stripped characters must not smuggle a label past the allowlist.
+    "acme\n", "acme\r\n", "acme\t", "acme\u0085", "acme\u00a0", "acme\ufeff", "acme\u2028",
   ]) {
     assert.throws(() => siteBaseUrl(hostile), `expected rejection of ${JSON.stringify(hostile)}`);
   }
@@ -41,15 +43,45 @@ test("rejects unsafe paths and serializes query arrays", () => {
     "/foo%2f..%2fsecret", "/x%5cy", "/bad\u0000path", "/bad\npath",
     // Control characters must be rejected, not trimmed away into a "clean" path.
     "/x.json\r\nX-Injected: 1", "/x.json\n", "\r\n/x.json", "/x.json\t", " \u001b[2J/x.json",
+    // String.trim() also strips these, so a trim-then-check order would accept them.
+    "/x.json\u0085", "/x.json\u2028", "/x.json\u2029", "/x.json\u00a0", "/x.json\ufeff",
+    "\ufeff//evil.test/x", "\u0085/x.json", "/x\u202ejson", "/a b.json",
   ]) {
     assert.throws(() => normalizeApiPath(hostile), `expected rejection of ${JSON.stringify(hostile)}`);
   }
-  // Ordinary surrounding whitespace stays tolerated.
+  // Only plain ASCII spaces are trimmed, and the result never carries a forbidden character.
   assert.equal(normalizeApiPath("  /x.json  "), "/x.json");
+  assert.doesNotMatch(normalizeApiPath("  /x.json  "), /[\p{C}\p{Z}]/u);
   assert.equal(
     buildUrl("/projects/api/v3/tasks.json", { "ids[]": [1, 2], includeArchived: false, empty: null }, SITE).toString(),
     `${ORIGIN}/projects/api/v3/tasks.json?ids%5B%5D=1&ids%5B%5D=2&includeArchived=false&empty=`,
   );
+});
+
+test("raw-value validation diverges from a raw-first order only for ASCII space padding", () => {
+  // Sweeps every control, format, and separator code point through U+2100 (C0, C1, all Z).
+  // A raw-first order rejects all of them; the only intended exemption is plain-space padding.
+  const forbidden = /[\p{C}\p{Z}]/u;
+  const accepted: string[] = [];
+  for (let cp = 0; cp <= 0x2100; cp++) {
+    const char = String.fromCodePoint(cp);
+    if (!forbidden.test(char)) continue;
+    for (const input of [`/safe${char}`, `${char}/safe`, `/sa${char}fe`]) {
+      try {
+        normalizeApiPath(input);
+        accepted.push(`path U+${cp.toString(16).padStart(4, "0")} ${JSON.stringify(input)}`);
+      } catch {
+        // Rejection is the expected outcome for every forbidden character.
+      }
+    }
+    try {
+      authHeader({ TEAMWORK_OAUTH_TOKEN: `secret${char}` });
+      accepted.push(`credential U+${cp.toString(16).padStart(4, "0")}`);
+    } catch {
+      // Rejection is the expected outcome here too.
+    }
+  }
+  assert.deepEqual(accepted, ['path U+0020 "/safe "', 'path U+0020 " /safe"', "credential U+0020"]);
 });
 
 test("validates the path before any network or auth use", async () => {
@@ -71,11 +103,22 @@ test("selects auth deterministically and never leaks secrets", async () => {
     { TEAMWORK_API_KEY: "twp_key\n" },
     { TEAMWORK_OAUTH_TOKEN: "tok\r" },
     { TEAMWORK_OAUTH_TOKEN: "tok", TEAMWORK_API_KEY: "twp_key\nX-Injected: 1" },
+    // Trim-stripped characters must fail too, not be cleaned into an accepted credential.
+    { TEAMWORK_OAUTH_TOKEN: "tok\u0085" },
+    { TEAMWORK_API_KEY: "twp_key\u2028" },
+    { TEAMWORK_OAUTH_TOKEN: "tok\ufeff" },
+    { TEAMWORK_API_KEY: "twp\u00a0key" },
+    { TEAMWORK_OAUTH_TOKEN: "tok tok" },
   ]) {
     assert.throws(() => authHeader(env), `expected rejection of ${JSON.stringify(env)}`);
   }
-  // Header construction can therefore never emit a line break.
-  assert.doesNotMatch(authHeader({ TEAMWORK_OAUTH_TOKEN: " tok " }), /[\r\n]/);
+  // The credential after the scheme can therefore never carry a control or whitespace character.
+  for (const env of [{ TEAMWORK_OAUTH_TOKEN: " tok " }, { TEAMWORK_API_KEY: " twp_key " }]) {
+    const [scheme, credential, ...rest] = authHeader(env).split(" ");
+    assert.ok(["Bearer", "Basic"].includes(scheme));
+    assert.deepEqual(rest, []);
+    assert.doesNotMatch(credential, /[\p{C}\p{Z}]/u);
+  }
 
   let seen: Headers | undefined;
   const fetchImpl: Fetcher = async (_url, init) => {
