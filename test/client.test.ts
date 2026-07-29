@@ -58,6 +58,32 @@ test("rejects unsafe paths and serializes query arrays", () => {
   );
 });
 
+test("raw-value validation diverges from a raw-first order only for ASCII space padding", () => {
+  // Sweeps every control, format, and separator code point through U+2100 (C0, C1, all Z).
+  // A raw-first order rejects all of them; the only intended exemption is plain-space padding.
+  const forbidden = /[\p{C}\p{Z}]/u;
+  const accepted: string[] = [];
+  for (let cp = 0; cp <= 0x2100; cp++) {
+    const char = String.fromCodePoint(cp);
+    if (!forbidden.test(char)) continue;
+    for (const input of [`/safe${char}`, `${char}/safe`, `/sa${char}fe`]) {
+      try {
+        normalizeApiPath(input);
+        accepted.push(`path U+${cp.toString(16).padStart(4, "0")} ${JSON.stringify(input)}`);
+      } catch {
+        // Rejection is the expected outcome for every forbidden character.
+      }
+    }
+    try {
+      authHeader({ TEAMWORK_OAUTH_TOKEN: `secret${char}` });
+      accepted.push(`credential U+${cp.toString(16).padStart(4, "0")}`);
+    } catch {
+      // Rejection is the expected outcome here too.
+    }
+  }
+  assert.deepEqual(accepted, ['path U+0020 "/safe "', 'path U+0020 " /safe"', "credential U+0020"]);
+});
+
 test("validates the path before any network or auth use", async () => {
   await assert.rejects(requestTeamwork({ method: "GET", path: "https://evil.test/steal" }, { site: SITE, auth: AUTH, fetchImpl: noFetch }));
   await assert.rejects(requestTeamwork({ method: "GET", path: "/x" }, { site: "evil.test", auth: AUTH, fetchImpl: noFetch }));
