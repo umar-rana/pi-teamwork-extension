@@ -1,0 +1,20 @@
+name: verify
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [development, staging, production]
+  pull_request:
+    branches: [staging, production]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - run: npm ci
+      - run: npm run verify
