@@ -16,9 +16,9 @@ import {
   extractOperations,
   loadOpenApiSpecs,
   operationDetail,
+  buildUrl,
   requestTeamwork,
   searchOperations,
-  siteBaseUrl,
   type HttpMethod,
   type OpenApiOperation,
   type QueryValue,
@@ -112,8 +112,9 @@ export default function teamworkExtension(pi: ExtensionAPI) {
       const method = params.method as HttpMethod;
       // Fresh confirmation per invocation; never remembered, never body-revealing.
       if (MUTATING_METHODS.includes(method)) {
-        const target = `${method} ${siteBaseUrl().origin}${params.path}`;
-        if (!ctx.hasUI || !await ctx.ui.confirm("Send this Teamwork change?", target)) {
+        // Validate first so the prompt can only ever show a confined, control-character-free URL.
+        const url = buildUrl(params.path, params.query as Record<string, QueryValue> | undefined);
+        if (!ctx.hasUI || !await ctx.ui.confirm("Send this Teamwork change?", `${method} ${url.origin}${url.pathname}`)) {
           throw new Error(`Teamwork ${method} cancelled; explicit interactive confirmation is required.`);
         }
       }

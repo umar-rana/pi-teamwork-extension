@@ -39,9 +39,13 @@ test("rejects unsafe paths and serializes query arrays", () => {
     "https://evil.test/x", "http://evil.test/x", "//evil.test/x", "javascript:alert(1)",
     "/x?a=1", "/x#frag", "/x\\..\\y", "/projects/../../secret", "/%2e%2e/secret",
     "/foo%2f..%2fsecret", "/x%5cy", "/bad\u0000path", "/bad\npath",
+    // Control characters must be rejected, not trimmed away into a "clean" path.
+    "/x.json\r\nX-Injected: 1", "/x.json\n", "\r\n/x.json", "/x.json\t", " \u001b[2J/x.json",
   ]) {
     assert.throws(() => normalizeApiPath(hostile), `expected rejection of ${JSON.stringify(hostile)}`);
   }
+  // Ordinary surrounding whitespace stays tolerated.
+  assert.equal(normalizeApiPath("  /x.json  "), "/x.json");
   assert.equal(
     buildUrl("/projects/api/v3/tasks.json", { "ids[]": [1, 2], includeArchived: false, empty: null }, SITE).toString(),
     `${ORIGIN}/projects/api/v3/tasks.json?ids%5B%5D=1&ids%5B%5D=2&includeArchived=false&empty=`,
@@ -59,7 +63,19 @@ test("selects auth deterministically and never leaks secrets", async () => {
   assert.equal(authHeader({ TEAMWORK_OAUTH_TOKEN: "tok", TEAMWORK_API_KEY: "twp_key" }), "Bearer tok");
   assert.throws(() => authHeader({}));
   assert.throws(() => authHeader({ TEAMWORK_OAUTH_TOKEN: "   " }));
-  assert.throws(() => authHeader({ TEAMWORK_API_KEY: "bad\r\nX-Injected: 1" }));
+  // A line break must be rejected even when trimming alone would have removed it,
+  // and even when the other variable would otherwise satisfy the request.
+  for (const env of [
+    { TEAMWORK_API_KEY: "bad\r\nX-Injected: 1" },
+    { TEAMWORK_OAUTH_TOKEN: "tok\r\nX-Injected: 1" },
+    { TEAMWORK_API_KEY: "twp_key\n" },
+    { TEAMWORK_OAUTH_TOKEN: "tok\r" },
+    { TEAMWORK_OAUTH_TOKEN: "tok", TEAMWORK_API_KEY: "twp_key\nX-Injected: 1" },
+  ]) {
+    assert.throws(() => authHeader(env), `expected rejection of ${JSON.stringify(env)}`);
+  }
+  // Header construction can therefore never emit a line break.
+  assert.doesNotMatch(authHeader({ TEAMWORK_OAUTH_TOKEN: " tok " }), /[\r\n]/);
 
   let seen: Headers | undefined;
   const fetchImpl: Fetcher = async (_url, init) => {
@@ -174,7 +190,20 @@ test("requires every spec source and a paths mapping", async () => {
 
   await assert.rejects(loadOpenApiSpecs(async input =>
     String(input) === SPEC_URLS.v3 ? new Response("nope", { status: 500 }) : new Response("paths: {}")), /v3/);
-  await assert.rejects(loadOpenApiSpecs(async () => new Response("just a string")), /valid OpenAPI/);
+
+  // `paths` must be a mapping; null and sequences would otherwise publish an empty catalog.
+  for (const malformed of ["just a string", "- a\n- b", "paths:\n", "paths: []", "paths: 3", "paths: text", ""]) {
+    await assert.rejects(
+      loadOpenApiSpecs(async () => new Response(malformed)),
+      /valid OpenAPI/,
+      `expected rejection of ${JSON.stringify(malformed)}`,
+    );
+    await assert.rejects(
+      loadOpenApiSpecs(async input => new Response(String(input) === SPEC_URLS.v1 ? malformed : "paths: {}")),
+      /valid OpenAPI/,
+      `expected one malformed source to fail the whole load: ${JSON.stringify(malformed)}`,
+    );
+  }
 });
 
 test("dedupes the union, prefers versioned specs, and resolves local refs only", () => {

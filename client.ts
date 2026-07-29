@@ -86,13 +86,14 @@ export function siteBaseUrl(input = process.env.TEAMWORK_SITE_NAME): URL {
 }
 
 export function normalizeApiPath(input: string): string {
+  // Check the raw value first: trimming would silently strip a trailing CR/LF instead of rejecting it.
+  if (/[\u0000-\u001f\u007f]/.test(input)) throw new Error("Control characters are not allowed in an API path.");
   const path = input.trim();
   if (/^[a-z][a-z0-9+.-]*:/i.test(path)) throw new Error("Use a Teamwork API path, not a full URL.");
   if (path.startsWith("//")) throw new Error("Use a Teamwork API path, not a protocol-relative URL.");
   if (path.includes("?")) throw new Error("Put query parameters in the query object.");
   if (path.includes("#")) throw new Error("Fragments are not allowed in an API path.");
   if (path.includes("\\")) throw new Error("Backslashes are not allowed in an API path.");
-  if (/[\u0000-\u001f\u007f]/.test(path)) throw new Error("Control characters are not allowed in an API path.");
   if (/%(?:2e|2f|5c)/i.test(path)) throw new Error("Encoded path traversal characters are not allowed.");
   const normalized = path.startsWith("/") ? path : `/${path}`;
   if (normalized.split("/").includes("..")) throw new Error("Path traversal segments are not allowed.");
@@ -113,11 +114,15 @@ export function buildUrl(path: string, query: Record<string, QueryValue> = {}, s
 
 /** OAuth wins deterministically; the API key is the Basic username with a placeholder password. */
 export function authHeader(env: NodeJS.ProcessEnv = process.env): string {
+  // Reject line breaks in the raw values: trimming first would hide header injection
+  // attempts behind a silently "cleaned" credential.
+  for (const name of ["TEAMWORK_OAUTH_TOKEN", "TEAMWORK_API_KEY"] as const) {
+    if (/[\r\n]/.test(env[name] ?? "")) throw new Error(`${name} contains an illegal line break.`);
+  }
   const token = env.TEAMWORK_OAUTH_TOKEN?.trim();
   const key = env.TEAMWORK_API_KEY?.trim();
   const secret = token || key;
   if (!secret) throw new Error("Teamwork auth not configured. Set TEAMWORK_OAUTH_TOKEN or TEAMWORK_API_KEY.");
-  if (/[\r\n]/.test(secret)) throw new Error("Teamwork credential contains an illegal line break.");
   return token ? `Bearer ${token}` : `Basic ${Buffer.from(`${key}:X`, "utf8").toString("base64")}`;
 }
 
@@ -223,10 +228,15 @@ async function loadSpec(source: SpecSource, fetchImpl: Fetcher, signal?: AbortSi
   // YAML also parses the JSON bodies some of these .yml URLs return; those contain
   // duplicate keys, which JSON allows (last wins) but strict YAML rejects.
   const spec = parseYaml(await readLimited(response, SPEC_MAX_BYTES, source), { uniqueKeys: false }) as unknown;
-  if (!spec || typeof spec !== "object" || Array.isArray(spec) || typeof (spec as Record<string, unknown>).paths !== "object") {
+  if (!isMapping(spec) || !isMapping(spec.paths)) {
     throw new Error(`The Teamwork ${source} specification is not a valid OpenAPI document.`);
   }
-  return spec as Record<string, unknown>;
+  return spec;
+}
+
+/** A YAML mapping only: `null` and sequences are both `typeof "object"` but cannot carry `paths`. */
+function isMapping(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function readLimited(response: Response, limit: number, source: string): Promise<string> {
