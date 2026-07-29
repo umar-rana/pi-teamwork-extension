@@ -11,6 +11,16 @@ export const SPEC_URLS = {
 export const SPEC_ORDER = ["v1", "v2", "v3", "object"] as const;
 
 const SITE_NAME = /^(?=.{1,63}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/**
+ * Every Unicode control, format, and separator character. `String.trim()` strips far more
+ * than ASCII whitespace (U+0085 NEL, U+2028, U+2029, U+00A0, U+FEFF), so trimming before a
+ * `\u0000-\u001f` check would silently accept a header-injecting or UI-spoofing value.
+ */
+const FORBIDDEN_CHARS = /[\p{C}\p{Z}]/u;
+
+/** Trims only plain ASCII spaces, leaving every other character for validation to reject. */
+const trimSpaces = (value: string): string => value.replace(/^ +| +$/g, "");
 const SPEC_TIMEOUT_MS = 30_000;
 const SPEC_MAX_BYTES = 10 * 1024 * 1024;
 const ERROR_EXCERPT_BYTES = 8_000;
@@ -74,7 +84,7 @@ export class TeamworkApiError extends Error {
 
 /** Builds the only origin this extension may talk to. The site name is a label, never a URL. */
 export function siteBaseUrl(input = process.env.TEAMWORK_SITE_NAME): URL {
-  const site = (input ?? "").trim().toLowerCase();
+  const site = trimSpaces(input ?? "").toLowerCase();
   if (!site) throw new Error("Teamwork site not configured. Set TEAMWORK_SITE_NAME to your site name, for example `acme`.");
   if (!SITE_NAME.test(site)) throw new Error("TEAMWORK_SITE_NAME must be a bare site label such as `acme`, not a URL, host, or path.");
 
@@ -86,9 +96,9 @@ export function siteBaseUrl(input = process.env.TEAMWORK_SITE_NAME): URL {
 }
 
 export function normalizeApiPath(input: string): string {
-  // Check the raw value first: trimming would silently strip a trailing CR/LF instead of rejecting it.
-  if (/[\u0000-\u001f\u007f]/.test(input)) throw new Error("Control characters are not allowed in an API path.");
-  const path = input.trim();
+  const path = trimSpaces(input);
+  // Validate before any other normalization so nothing hostile can be silently cleaned away.
+  if (FORBIDDEN_CHARS.test(path)) throw new Error("Control, format, and whitespace characters are not allowed in an API path.");
   if (/^[a-z][a-z0-9+.-]*:/i.test(path)) throw new Error("Use a Teamwork API path, not a full URL.");
   if (path.startsWith("//")) throw new Error("Use a Teamwork API path, not a protocol-relative URL.");
   if (path.includes("?")) throw new Error("Put query parameters in the query object.");
@@ -114,13 +124,15 @@ export function buildUrl(path: string, query: Record<string, QueryValue> = {}, s
 
 /** OAuth wins deterministically; the API key is the Basic username with a placeholder password. */
 export function authHeader(env: NodeJS.ProcessEnv = process.env): string {
-  // Reject line breaks in the raw values: trimming first would hide header injection
-  // attempts behind a silently "cleaned" credential.
+  // Validate before selection: trimming first would hide header injection behind a
+  // silently "cleaned" credential, and a poisoned unused variable must still fail loudly.
   for (const name of ["TEAMWORK_OAUTH_TOKEN", "TEAMWORK_API_KEY"] as const) {
-    if (/[\r\n]/.test(env[name] ?? "")) throw new Error(`${name} contains an illegal line break.`);
+    if (FORBIDDEN_CHARS.test(trimSpaces(env[name] ?? ""))) {
+      throw new Error(`${name} contains an illegal control or whitespace character.`);
+    }
   }
-  const token = env.TEAMWORK_OAUTH_TOKEN?.trim();
-  const key = env.TEAMWORK_API_KEY?.trim();
+  const token = trimSpaces(env.TEAMWORK_OAUTH_TOKEN ?? "") || undefined;
+  const key = trimSpaces(env.TEAMWORK_API_KEY ?? "") || undefined;
   const secret = token || key;
   if (!secret) throw new Error("Teamwork auth not configured. Set TEAMWORK_OAUTH_TOKEN or TEAMWORK_API_KEY.");
   return token ? `Bearer ${token}` : `Basic ${Buffer.from(`${key}:X`, "utf8").toString("base64")}`;
