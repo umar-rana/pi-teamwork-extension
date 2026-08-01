@@ -115,6 +115,8 @@ The OAS does not provide a trustworthy, complete destructive-operation marker. U
 | `GET` | No |
 | `POST`, `PUT`, `PATCH`, `DELETE` | Required for every call |
 
+> **Rejected proposal (2026-08-01):** A change was proposed to narrow confirmation to `DELETE` only, matching `pi-clickup`'s pattern, in response to real user friction from bulk project-management writes (dozens of `POST`/`PUT` calls per session). QA's security review (PR #11) rejected it: Teamwork's official OAS documents at least 17 destructive operations under `POST`/`PUT` rather than `DELETE`, including bulk-delete of custom fields/tags/reports/quote line items (`POST .../bulk/delete.json`) and "Remove a User from a Project" (`PUT /projects/{projectId}/people/{personId}.json`). HTTP method alone is not a safe destructive-operation classifier for this API, confirming the caution already stated at the top of this section. The rule above stands unchanged. A future revision must use an architecture-approved, operation-aware policy (not a bare method or path heuristic) if this friction is revisited.
+
 The Pi tool boundary must:
 
 1. check `ctx.hasUI`;
