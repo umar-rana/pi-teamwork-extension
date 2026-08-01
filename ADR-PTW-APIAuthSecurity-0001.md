@@ -112,10 +112,8 @@ The OAS does not provide a trustworthy, complete destructive-operation marker. U
 
 | Method | Confirmation |
 |---|---|
-| `GET`, `POST`, `PUT`, `PATCH` | No |
-| `DELETE` | Required for every call |
-
-> **Amendment (2026-08-01):** The original design required confirmation on every `POST`, `PUT`, `PATCH`, and `DELETE`. Real production usage (bulk project-management writes: creating dozens of tasks, tasklists, and milestones per session) made that a per-call approval bottleneck rather than a meaningful safety gate, and it matches neither the user's actual risk model nor `pi-clickup`'s proven pattern (confirmation on `DELETE` and file uploads only). Revised to confirm only `DELETE`, consistent with `pi-clickup`. `POST`/`PUT`/`PATCH` create or update existing Teamwork state and are recoverable through Teamwork's own edit history; `DELETE` is the one operation this extension cannot undo. Reviewed and merged by QA (`pi-qa-2`) as part of the same release process as prior fixes.
+| `GET` | No |
+| `POST`, `PUT`, `PATCH`, `DELETE` | Required for every call |
 
 The Pi tool boundary must:
 
