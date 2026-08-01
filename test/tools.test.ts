@@ -136,6 +136,16 @@ test("the prompt shows the confined URL and never the body or a raw hostile path
   }
 });
 
+test("declares sequential execution so concurrent mutating calls cannot race the confirmation dialog", async () => {
+  // This is the exact shape that stalled in production: two mutating teamwork_api calls in the
+  // same turn each opening ctx.ui.confirm(). Pi's parallel tool runner only serializes a batch
+  // when a tool in it declares executionMode "sequential" - without that flag, two concurrent
+  // confirm() calls raced the same TUI dialog and the session hung with no visible prompt until
+  // the user typed into the terminal by hand. Guard the declaration directly, since a full replay
+  // of Pi's parallel scheduler is out of scope for a unit test.
+  assert.equal(tools().teamwork_api.executionMode, "sequential");
+});
+
 test("a misconfigured site or credential is rejected before prompting", async () => {
   const api = tools().teamwork_api;
   for (const env of [
