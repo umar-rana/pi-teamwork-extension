@@ -22,7 +22,7 @@ Calls any authenticated Teamwork.com API endpoint on your configured site with:
 - Cancellation and per-attempt timeouts
 - 50 KB / 2,000-line output truncation
 
-Every POST, PUT, PATCH, and DELETE requires interactive confirmation.
+Every DELETE requires interactive confirmation.
 
 ## Requirements
 
@@ -131,7 +131,7 @@ Availability still depends on the Teamwork site's plan and the authenticated use
 - Fixed Teamwork site confinement for authenticated calls: `teamwork_api` only ever contacts `https://{TEAMWORK_SITE_NAME}.teamwork.com`. `teamwork_docs` separately fetches four fixed, unauthenticated OpenAPI specification URLs from Teamwork's own asset hosts to build its catalog; no credential is ever sent there.
 - Rejection of full URLs, protocol-relative URLs, query strings, fragments, control characters, and encoded traversal in API paths
 - Deterministic OAuth-over-Basic auth selection; no credential logging or inclusion in tool output
-- Interactive confirmation for every POST, PUT, PATCH, and DELETE, one invocation at a time (concurrent mutating calls cannot race the confirmation dialog)
+- Interactive confirmation for every DELETE, one invocation at a time (concurrent DELETE calls cannot race the confirmation dialog). `POST`, `PUT`, and `PATCH` proceed directly, matching `pi-clickup`'s pattern, since they create or update recoverable Teamwork state rather than permanently destroying it.
 - Manual redirect handling; 3xx responses are rejected outright
 - Mutating requests are never retried after 5xx, network, or timeout errors, preventing accidental duplicate writes
 - Teamwork content and OpenAPI descriptions are treated as untrusted data, not agent instructions

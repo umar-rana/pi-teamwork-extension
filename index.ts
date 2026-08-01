@@ -11,7 +11,6 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  MUTATING_METHODS,
   SPEC_ORDER,
   extractOperations,
   loadOpenApiSpecs,
@@ -93,7 +92,7 @@ export default function teamworkExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "teamwork_api",
     label: "Teamwork API",
-    description: "Call any authenticated Teamwork.com API endpoint on your configured site using a relative path, query object, and JSON body. Output is limited to 50KB/2000 lines; full oversized responses are saved to a private temporary file. Every POST, PUT, PATCH, and DELETE requires user confirmation.",
+    description: "Call any authenticated Teamwork.com API endpoint on your configured site using a relative path, query object, and JSON body. Output is limited to 50KB/2000 lines; full oversized responses are saved to a private temporary file. DELETE requires user confirmation.",
     promptSnippet: "Call any Teamwork.com API endpoint on the configured site",
     promptGuidelines: [
       "Use teamwork_api for every Teamwork read or mutation; use teamwork_docs first when the endpoint schema is uncertain.",
@@ -108,17 +107,20 @@ export default function teamworkExtension(pi: ExtensionAPI) {
       body: Type.Optional(Type.Any({ description: "JSON request body." })),
       timeout_ms: Type.Optional(Type.Integer({ minimum: 1_000, maximum: 120_000, description: "Per-attempt timeout; defaults to 30000." })),
     }),
-    // Mutations open a blocking confirmation dialog; run one invocation at a time so two
-    // concurrent PUT/POST/PATCH/DELETE calls in the same turn can't race for the same UI
-    // dialog and stall with no visible prompt.
+    // DELETE opens a blocking confirmation dialog; run one invocation at a time so two
+    // concurrent DELETE calls in the same turn can't race for the same UI dialog and
+    // stall with no visible prompt.
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const method = params.method as HttpMethod;
       // Fresh confirmation per invocation; never remembered, never body-revealing.
-      if (MUTATING_METHODS.includes(method)) {
+      // Only DELETE confirms: POST/PUT/PATCH create or update existing Teamwork state and are not
+      // permanently destructive the way DELETE is, and bulk project-management writes (creating
+      // many tasks/milestones in one turn) are the extension's primary real-world use.
+      if (method === "DELETE") {
         // Validate first so the prompt can only ever show a confined, control-character-free URL.
         const url = buildUrl(params.path, params.query as Record<string, QueryValue> | undefined);
-        if (!ctx.hasUI || !await ctx.ui.confirm("Send this Teamwork change?", `${method} ${url.origin}${url.pathname}`)) {
+        if (!ctx.hasUI || !await ctx.ui.confirm("Delete this Teamwork resource?", `${method} ${url.origin}${url.pathname}`)) {
           throw new Error(`Teamwork ${method} cancelled; explicit interactive confirmation is required.`);
         }
       }

@@ -27,7 +27,7 @@ Build a public Pi extension for stable, direct Teamwork.com PM operations. The e
 ## What shipped
 
 - `client.ts`: strict `TEAMWORK_SITE_NAME` validation, single-origin path confinement, manual redirect rejection, deterministic Bearer-over-Basic auth (raw CR/LF and full Unicode control/format/separator rejection before trimming), bounded abortable retries with no mutation replay, all-or-nothing four-source OAS loader with union dedup and local-only `$ref` resolution.
-- `index.ts`: session-cached `teamwork_docs` with explicit refresh; `teamwork_api` with fresh per-invocation confirmation for every non-GET (confined normalized path only, no raw/hostile input, no body), bounded output spilling to a 0600 temp file, and `executionMode: "sequential"` so concurrent mutating calls in one turn can't race the confirmation dialog.
+- `index.ts`: session-cached `teamwork_docs` with explicit refresh; `teamwork_api` with fresh per-invocation confirmation for `DELETE` only (confined normalized path only, no raw/hostile input, no body), bounded output spilling to a 0600 temp file, and `executionMode: "sequential"` so concurrent `DELETE` calls in one turn can't race the confirmation dialog.
 - `test/client.test.ts` + `test/tools.test.ts`: 17 passing tests (1 opt-in live-spec skip).
 - `.github/workflows/verify.yml`: CI gate mirroring `pi-clickup-extension`.
 
@@ -35,7 +35,11 @@ Build a public Pi extension for stable, direct Teamwork.com PM operations. The e
 
 **2026-07-29:** User reported the extension "gets stuck while updating" in a real Teamwork workspace (Malco Properties), once for ~98 minutes with no visible confirmation prompt and no error. Root cause: Pi's agent loop runs same-turn tool calls in parallel by default; the model sometimes batches multiple mutating `teamwork_api` calls in one turn, and two concurrent `ctx.ui.confirm()` dialogs raced the same TUI dialog with nothing surfaced to the user. Fixed by declaring `teamwork_api` `executionMode: "sequential"` (PR #5 → `staging`, PR #6 → `production` at `50f2f8e`), which forces Pi's scheduler to serialize any turn containing it.
 
-**Recommended follow-up (not started):** `pi-clickup` has the same latent gap (DELETE and file-upload confirmations could theoretically race the same way) but is far less likely to trigger it since it only confirms on `DELETE`, not every mutating method. QA recommends a separate fix ticket for `pi-clickup`.
+**Recommended follow-up:** `pi-clickup` has the same latent gap (DELETE and file-upload confirmations could theoretically race the same way) but is far less likely to trigger it since it only confirms on `DELETE`, not every mutating method. **Done** — `pi-clickup`'s `clickup_api` now declares `executionMode: "sequential"` too (merged to `production` at `520c675`).
+
+## Mutation confirmation narrowed to DELETE only
+
+**2026-08-01:** Real production usage (bulk project-management writes creating dozens of tasks/tasklists/milestones per session in a live Teamwork workspace) made per-call confirmation on every `POST`/`PUT`/`PATCH`/`DELETE` a bottleneck, not a meaningful safety gate, and put this extension out of step with `pi-clickup`'s proven pattern. Amended `ADR-PTW-APIAuthSecurity-0001.md` §5 (pushed to `architecture-dev`) and narrowed `teamwork_api` confirmation to `DELETE` only — `POST`/`PUT`/`PATCH` now proceed directly, matching `pi-clickup` exactly. `executionMode: "sequential"` remains, since concurrent `DELETE` calls can still race. Regression tests updated to assert the new behavior.
 
 ## Team
 
