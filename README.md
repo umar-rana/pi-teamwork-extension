@@ -72,12 +72,14 @@ export TEAMWORK_API_KEY
 ### Linux with Bash
 
 ```bash
-read -r -s -p "Teamwork API key: " teamwork_key; echo
 mkdir -p "$HOME/.config/teamwork"
+(umask 077 && : > "$HOME/.config/teamwork/api_key")
+read -r -s -p "Teamwork API key: " teamwork_key; echo
 printf '%s' "$teamwork_key" > "$HOME/.config/teamwork/api_key"
 unset teamwork_key
-chmod 600 "$HOME/.config/teamwork/api_key"
 ```
+
+The file is created mode `0600` before anything is written to it, so the key is never briefly readable by other local users.
 
 Then add to your shell profile:
 
@@ -95,7 +97,9 @@ export TEAMWORK_API_KEY
 | `TEAMWORK_OAUTH_TOKEN` | OAuth access token. Preferred over the API key if both are set. |
 | `TEAMWORK_API_KEY` | Personal API key, sent as the Basic auth username. |
 
-The credential is sent only in the `Authorization` header to `https://{TEAMWORK_SITE_NAME}.teamwork.com`.
+The credential is sent only in the `Authorization` header to `https://{TEAMWORK_SITE_NAME}.teamwork.com`; it is never sent to the OpenAPI-specification hosts below.
+
+`teamwork_docs` separately fetches Teamwork's four official OpenAPI specifications unauthenticated (no credential is sent) from Teamwork's own asset hosts (`assets.contento.io` and `contento-assets.s3.eu-west-1.amazonaws.com`) to build its searchable catalog. Only `teamwork_api` is confined to your configured site; `teamwork_docs` is discovery data from Teamwork's public documentation pipeline, not your site.
 
 ## Usage
 
@@ -124,7 +128,7 @@ Availability still depends on the Teamwork site's plan and the authenticated use
 
 ## Security model
 
-- Fixed Teamwork site confinement: only `https://{TEAMWORK_SITE_NAME}.teamwork.com` is ever contacted
+- Fixed Teamwork site confinement for authenticated calls: `teamwork_api` only ever contacts `https://{TEAMWORK_SITE_NAME}.teamwork.com`. `teamwork_docs` separately fetches four fixed, unauthenticated OpenAPI specification URLs from Teamwork's own asset hosts to build its catalog; no credential is ever sent there.
 - Rejection of full URLs, protocol-relative URLs, query strings, fragments, control characters, and encoded traversal in API paths
 - Deterministic OAuth-over-Basic auth selection; no credential logging or inclusion in tool output
 - Interactive confirmation for every POST, PUT, PATCH, and DELETE, one invocation at a time (concurrent mutating calls cannot race the confirmation dialog)
