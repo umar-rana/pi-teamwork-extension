@@ -108,6 +108,10 @@ export default function teamworkExtension(pi: ExtensionAPI) {
       body: Type.Optional(Type.Any({ description: "JSON request body." })),
       timeout_ms: Type.Optional(Type.Integer({ minimum: 1_000, maximum: 120_000, description: "Per-attempt timeout; defaults to 30000." })),
     }),
+    // Mutations open a blocking confirmation dialog; run one invocation at a time so two
+    // concurrent PUT/POST/PATCH/DELETE calls in the same turn can't race for the same UI
+    // dialog and stall with no visible prompt.
+    executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const method = params.method as HttpMethod;
       // Fresh confirmation per invocation; never remembered, never body-revealing.
